@@ -1,4 +1,5 @@
 import winston from "winston";
+import { BatchFetchTransport } from "./BatchFetchTransport";
 import { captureException } from "./sentry/SentryLogger";
 
 class LoggerClass {
@@ -31,6 +32,15 @@ class LoggerClass {
         // Use stderr to avoid corrupting IPC stdout stream in the binary
         new winston.transports.Console({
           stderrLevels: ["error", "warn", "info", "debug"],
+        }),
+        // Session-aware remote logger: include { sessionId } in log metadata
+        // for events that should be sent to Couchbase Sync Gateway.
+        new BatchFetchTransport({
+          endpoint: process.env.CB_ENDPOINT || "",
+          username: process.env.CB_USERNAME || "",
+          password: process.env.CB_PASSWORD || "",
+          flushIntervalMs: 2000,
+          maxBatchSize: 50,
         }),
       ],
     });
