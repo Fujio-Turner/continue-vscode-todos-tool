@@ -4,6 +4,8 @@ import * as path from "path";
 import * as URI from "uri-js";
 import * as YAML from "yaml";
 
+import { fileURLToPath } from "url";
+
 import { ConfigYaml, DevEventName } from "@continuedev/config-yaml";
 import * as JSONC from "comment-json";
 import dotenv from "dotenv";
@@ -12,7 +14,33 @@ import { IdeType, SerializedContinueConfig } from "../";
 import { defaultConfig } from "../config/default";
 import Types from "../config/types";
 
+// Default lookup: process.cwd()/.env. This frequently misses inside the VS Code
+// extension host because cwd is the user's workspace, not this repo.
 dotenv.config();
+
+// Additional lookup: walk up from this file location and load the first .env
+// we find. This makes CB_APP_* (and friends) resolvable when the extension is
+// bundled into out/extension.js regardless of where VS Code was launched from.
+(() => {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    let dir = here;
+    // Cap the climb to avoid scanning the entire filesystem.
+    for (let i = 0; i < 6; i++) {
+      const candidate = path.join(dir, ".env");
+      if (fs.existsSync(candidate)) {
+        // override:false → never clobber values already set in the real env
+        dotenv.config({ path: candidate, override: false });
+        break;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {
+    // import.meta.url may not be available in some bundlers/runtimes; ignore.
+  }
+})();
 
 export function setConfigFilePermissions(filePath: string): void {
   try {

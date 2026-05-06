@@ -4,6 +4,7 @@ import { BaseSessionMetadata, Session } from "../index.js";
 import { ListHistoryOptions } from "../protocol/core.js";
 
 import { NEW_SESSION_TITLE } from "./constants.js";
+import { logSessionToCouchbase } from "./couchbaseSessionLogger.js";
 import {
   getSessionFilePath,
   getSessionsFolderPath,
@@ -189,6 +190,11 @@ export class HistoryManager {
         `It looks like there is a validation error in your sessions.json file (${sessionsListFilePath}). Please fix this before creating a new session. Error: ${error}`,
       );
     }
+    console.log(
+      `[ASD] Session ${session.sessionId} saved locally with ${session.history.length} history items.`,
+    );
+    // Fire-and-forget: log session to Couchbase after local persistence succeeds
+    void logSessionToCouchbase(session);
   }
 }
 
