@@ -130,13 +130,62 @@ function sanitizeContextItem(c: any): Record<string, unknown> {
   return picked;
 }
 
+type SchemaStatus = "done" | "errored" | "canceled";
+
 /**
- * Schema enum for ToolCallState.status is ["done"] only. Real values include
- * "errored", "canceled", "generating", "generated", "calling". Coerce all to
- * "done" to satisfy the schema; failure detail is preserved inside output[].
+ * Normalize runtime status to schema whitelist. Status values "errored" and
+ * "canceled" are preserved. Transient states (generating/generated/calling)
+ * normalize to "done" because by the time a session is logged, they should
+ * never persist; if they do, treating them as success keeps validation green.
  */
-function coerceStatus(_status: unknown): "done" {
+function normalizeStatus(status: unknown): SchemaStatus {
+  if (status === "errored" || status === "canceled") return status;
+  // generating / generated / calling / undefined → done (terminal success)
   return "done";
+}
+
+export interface ToolCallError {
+  code: string; // "ANALYSIS_FAILED" | "UNKNOWN"
+  message: string; // human-readable
+  rawStatus: string; // original runtime status, verbatim
+  rawOutput: string; // first output[].content as string
+}
+
+/**
+ * Extract structured error from an errored/canceled ToolCallState.
+ * Parses the JSON envelope embedded in output[0].content by the runtime.
+ * Returns undefined for non-error states.
+ */
+function extractToolCallError(state: any): ToolCallError | undefined {
+  if (state?.status !== "errored" && state?.status !== "canceled")
+    return undefined;
+
+  const first = Array.isArray(state?.output) ? state.output[0] : undefined;
+  const rawOutput = typeof first?.content === "string" ? first.content : "";
+
+  // Runtime format: `<tool> failed with the message: [{"type":"text","text":"{...json...}"}]`
+  let code = "UNKNOWN";
+  let message = rawOutput || "N/A";
+
+  const jsonMatch = rawOutput.match(/"text"\s*:\s*"({.*?})"/s);
+  if (jsonMatch) {
+    try {
+      const inner = JSON.parse(
+        jsonMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\"),
+      );
+      if (typeof inner?.code === "string") code = inner.code;
+      if (typeof inner?.message === "string") message = inner.message;
+    } catch {
+      // fall through with rawOutput as message
+    }
+  }
+
+  return {
+    code,
+    message,
+    rawStatus: typeof state.status === "string" ? state.status : "N/A",
+    rawOutput: rawOutput || "N/A",
+  };
 }
 
 function sanitizeToolDefinition(t: any): Record<string, unknown> {
@@ -156,8 +205,9 @@ function sanitizeToolOutput(o: any): Record<string, unknown> {
 }
 
 function sanitizeToolCallState(s: any): Record<string, unknown> {
+  const error = extractToolCallError(s);
   return {
-    status: coerceStatus(s?.status),
+    status: normalizeStatus(s?.status),
     toolCall: {
       id: s?.toolCall?.id,
       type: s?.toolCall?.type,
@@ -170,6 +220,7 @@ function sanitizeToolCallState(s: any): Record<string, unknown> {
     parsedArgs: s?.parsedArgs ?? {},
     tool: sanitizeToolDefinition(s?.tool),
     output: Array.isArray(s?.output) ? s.output.map(sanitizeToolOutput) : [],
+    ...(error ? { error } : {}),
   };
 }
 
@@ -199,6 +250,34 @@ function sanitizeHistoryItem(item: any): Record<string, unknown> {
 }
 
 /**
+ * Collect session-level summary of all failed tool invocations.
+ * One entry per errored/canceled tool call across the whole session.
+ */
+function collectToolErrors(history: any[]): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  history.forEach((item, historyIndex) => {
+    const states = Array.isArray(item?.toolCallStates)
+      ? item.toolCallStates
+      : [];
+    for (const state of states) {
+      const err = extractToolCallError(state);
+      if (!err) continue;
+      out.push({
+        historyIndex,
+        toolCallId: state?.toolCallId ?? "N/A",
+        toolName:
+          state?.toolCall?.function?.name ??
+          state?.tool?.function?.name ??
+          "N/A",
+        code: err.code,
+        message: err.message,
+      });
+    }
+  });
+  return out;
+}
+
+/**
  * Build the Capella document body from a Session, matching the JSON schema
  * exactly. Emits only the schema's required top-level keys; all Continue- and
  * PouchDB-specific extras are dropped.
@@ -206,13 +285,25 @@ function sanitizeHistoryItem(item: any): Record<string, unknown> {
 export function buildSessionDocument(
   session: Session,
 ): Record<string, unknown> {
-  return {
+  const doc: Record<string, unknown> = {
     src: COUCHBASE_SOURCE,
     sessionId: session.sessionId,
     title: session.title,
     workspaceDirectory: session.workspaceDirectory,
     chatHistory: (session.history ?? []).map(sanitizeHistoryItem),
   };
+  if (session.error !== undefined) {
+    doc.error = {
+      fileName: session.error.fileName,
+      filePath: session.error.filePath,
+      lineNumber: session.error.lineNumber,
+      message: session.error.message,
+      stack: session.error.stack,
+    };
+  }
+  const toolErrors = collectToolErrors(session.history ?? []);
+  if (toolErrors.length > 0) doc.toolErrors = toolErrors;
+  return doc;
 }
 
 const debug = (

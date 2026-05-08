@@ -251,7 +251,7 @@ describe("couchbaseSessionLogger", () => {
       expect((doc.chatHistory as any[])[0].message.toolCallId).toBe("c1");
     });
 
-    it("coerces ToolCallState.status (errored/canceled/...) to 'done'", () => {
+    it("normalizeStatus preserves errored/canceled and coerces transient states to done", () => {
       const baseToolCallState = {
         status: "errored",
         toolCall: {
@@ -289,8 +289,8 @@ describe("couchbaseSessionLogger", () => {
       const doc = buildSessionDocument(session);
       const states = (doc.chatHistory as any[])[0].toolCallStates;
       expect(states.map((s: any) => s.status)).toEqual([
-        "done",
-        "done",
+        "errored",
+        "canceled",
         "done",
       ]);
     });
@@ -467,6 +467,58 @@ describe("couchbaseSessionLogger", () => {
       expect(() => JSON.stringify(doc)).not.toThrow();
     });
 
+    it("includes the schema-aligned error block when session.error is set", () => {
+      const session: Session = {
+        ...baseSession,
+        error: {
+          fileName: "history.ts",
+          filePath: "/abs/core/util/history.ts",
+          lineNumber: 132,
+          message: "ENOSPC: no space left on device",
+          stack: "Error: ENOSPC...\n    at HistoryManager.save (...:132:5)",
+        },
+      };
+      const doc = buildSessionDocument(session);
+      expect((doc as any).error).toEqual({
+        fileName: "history.ts",
+        filePath: "/abs/core/util/history.ts",
+        lineNumber: 132,
+        message: "ENOSPC: no space left on device",
+        stack: "Error: ENOSPC...\n    at HistoryManager.save (...:132:5)",
+      });
+      // Schema requires all five keys when `error` is present
+      expect(Object.keys((doc as any).error).sort()).toEqual([
+        "fileName",
+        "filePath",
+        "lineNumber",
+        "message",
+        "stack",
+      ]);
+    });
+
+    it("supports N/A sentinels (timeout/network errors)", () => {
+      const session: Session = {
+        ...baseSession,
+        error: {
+          fileName: "N/A",
+          filePath: "N/A",
+          lineNumber: -1,
+          message: "fetch failed",
+          stack: "N/A",
+        },
+      };
+      const doc = buildSessionDocument(session);
+      expect((doc as any).error.fileName).toBe("N/A");
+      expect((doc as any).error.filePath).toBe("N/A");
+      expect((doc as any).error.lineNumber).toBe(-1);
+      expect(typeof (doc as any).error.lineNumber).toBe("number");
+    });
+
+    it("omits the error key entirely when session.error is undefined", () => {
+      const doc = buildSessionDocument(baseSession);
+      expect("error" in doc).toBe(false);
+    });
+
     it("output omits an undefined message id rather than emitting `undefined`", () => {
       const session: Session = {
         ...baseSession,
@@ -480,6 +532,322 @@ describe("couchbaseSessionLogger", () => {
       const doc = buildSessionDocument(session);
       const msg = (doc.chatHistory as any[])[0].message;
       expect("id" in msg).toBe(false);
+    });
+
+    it("sanitizes an errored state with structured code/message", () => {
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "assistant", content: "" },
+            contextItems: [],
+            toolCallStates: [
+              {
+                status: "errored",
+                toolCall: {
+                  id: "call_1",
+                  type: "function",
+                  function: {
+                    name: "agent_router_analyze_metadata",
+                    arguments: "{}",
+                  },
+                },
+                toolCallId: "call_1",
+                parsedArgs: {},
+                tool: {
+                  displayTitle: "foo",
+                  function: {
+                    name: "agent_router_analyze_metadata",
+                    description: "d",
+                    parameters: {},
+                  },
+                  readonly: false,
+                  type: "function",
+                  uri: "mcp://x/foo",
+                  group: "g",
+                  originalFunctionName: "foo",
+                },
+                output: [
+                  {
+                    name: "Tool Call Error",
+                    description: "Tool Call Failed",
+                    content:
+                      'agent_router_analyze_metadata failed with the message: [{"type":"text","text":"{\\"code\\":\\"ANALYSIS_FAILED\\",\\"message\\":\\"The analyze_metadata tool is currently disabled due to high resource usage. ...\\"}"}]',
+                  },
+                ],
+              },
+            ],
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const state = (doc.chatHistory as any[])[0].toolCallStates[0];
+      expect(state.status).toBe("errored");
+      expect(state.error).toBeDefined();
+      expect(state.error.code).toBe("ANALYSIS_FAILED");
+      expect(state.error.message).toContain(
+        "analyze_metadata tool is currently disabled",
+      );
+      expect(state.error.rawStatus).toBe("errored");
+    });
+
+    it("sanitizes an errored state with malformed output, defaulting to UNKNOWN", () => {
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "assistant", content: "" },
+            contextItems: [],
+            toolCallStates: [
+              {
+                status: "errored",
+                toolCall: {
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "foo", arguments: "{}" },
+                },
+                toolCallId: "call_1",
+                parsedArgs: {},
+                tool: {
+                  displayTitle: "foo",
+                  function: { name: "foo", description: "d", parameters: {} },
+                  readonly: false,
+                  type: "function",
+                  uri: "mcp://x/foo",
+                  group: "g",
+                  originalFunctionName: "foo",
+                },
+                output: [
+                  {
+                    name: "Tool Call Error",
+                    description: "Tool Call Failed",
+                    content: "boom: something went wrong",
+                  },
+                ],
+              },
+            ],
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const state = (doc.chatHistory as any[])[0].toolCallStates[0];
+      expect(state.error.code).toBe("UNKNOWN");
+      expect(state.error.message).toBe("boom: something went wrong");
+    });
+
+    it("sanitizes a canceled state", () => {
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "assistant", content: "" },
+            contextItems: [],
+            toolCallStates: [
+              {
+                status: "canceled",
+                toolCall: {
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "foo", arguments: "{}" },
+                },
+                toolCallId: "call_1",
+                parsedArgs: {},
+                tool: {
+                  displayTitle: "foo",
+                  function: { name: "foo", description: "d", parameters: {} },
+                  readonly: false,
+                  type: "function",
+                  uri: "mcp://x/foo",
+                  group: "g",
+                  originalFunctionName: "foo",
+                },
+                output: [
+                  {
+                    name: "Tool Call Canceled",
+                    description: "User canceled",
+                    content: "User pressed cancel",
+                  },
+                ],
+              },
+            ],
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const state = (doc.chatHistory as any[])[0].toolCallStates[0];
+      expect(state.status).toBe("canceled");
+      expect(state.error).toBeDefined();
+      expect(state.error.rawStatus).toBe("canceled");
+    });
+
+    it("normalizes generating/generated/calling to done with no error", () => {
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "assistant", content: "" },
+            contextItems: [],
+            toolCallStates: [
+              {
+                status: "generating",
+                toolCall: {
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "foo", arguments: "{}" },
+                },
+                toolCallId: "call_1",
+                parsedArgs: {},
+                tool: {
+                  displayTitle: "foo",
+                  function: { name: "foo", description: "d", parameters: {} },
+                  readonly: false,
+                  type: "function",
+                  uri: "mcp://x/foo",
+                  group: "g",
+                  originalFunctionName: "foo",
+                },
+                output: [],
+              },
+            ],
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const state = (doc.chatHistory as any[])[0].toolCallStates[0];
+      expect(state.status).toBe("done");
+      expect("error" in state).toBe(false);
+    });
+
+    it("buildSessionDocument collects one toolErrors[] entry per errored tool call", () => {
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "assistant", content: "" },
+            contextItems: [],
+            toolCallStates: [
+              {
+                status: "errored",
+                toolCall: {
+                  id: "call_1",
+                  type: "function",
+                  function: {
+                    name: "agent_router_analyze_metadata",
+                    arguments: "{}",
+                  },
+                },
+                toolCallId: "call_1",
+                parsedArgs: {},
+                tool: {
+                  displayTitle: "foo",
+                  function: {
+                    name: "agent_router_analyze_metadata",
+                    description: "d",
+                    parameters: {},
+                  },
+                  readonly: false,
+                  type: "function",
+                  uri: "mcp://x/foo",
+                  group: "g",
+                  originalFunctionName: "foo",
+                },
+                output: [
+                  {
+                    name: "Tool Call Error",
+                    description: "Tool Call Failed",
+                    content:
+                      'agent_router_analyze_metadata failed with the message: [{"type":"text","text":"{\\"code\\":\\"ANALYSIS_FAILED\\",\\"message\\":\\"The analyze_metadata tool is currently disabled due to high resource usage. ...\\"}"}]',
+                  },
+                ],
+              },
+            ],
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      expect("toolErrors" in doc).toBe(true);
+      const toolErrors = doc.toolErrors as any[];
+      expect(toolErrors.length).toBe(1);
+      expect(toolErrors[0].historyIndex).toBe(0);
+      expect(toolErrors[0].toolCallId).toBe("call_1");
+      expect(toolErrors[0].toolName).toBe("agent_router_analyze_metadata");
+      expect(toolErrors[0].code).toBe("ANALYSIS_FAILED");
+      expect(toolErrors[0].message).toContain(
+        "analyze_metadata tool is currently disabled",
+      );
+    });
+
+    it("omits toolErrors[] entirely when session has no failures", () => {
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "assistant", content: "" },
+            contextItems: [],
+            toolCallStates: [
+              {
+                status: "done",
+                toolCall: {
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "foo", arguments: "{}" },
+                },
+                toolCallId: "call_1",
+                parsedArgs: {},
+                tool: {
+                  displayTitle: "foo",
+                  function: { name: "foo", description: "d", parameters: {} },
+                  readonly: false,
+                  type: "function",
+                  uri: "mcp://x/foo",
+                  group: "g",
+                  originalFunctionName: "foo",
+                },
+                output: [],
+              },
+            ],
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      expect("toolErrors" in doc).toBe(false);
+    });
+
+    it("sanitizeToolCallState for a done state has no error key", () => {
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "assistant", content: "" },
+            contextItems: [],
+            toolCallStates: [
+              {
+                status: "done",
+                toolCall: {
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "foo", arguments: "{}" },
+                },
+                toolCallId: "call_1",
+                parsedArgs: {},
+                tool: {
+                  displayTitle: "foo",
+                  function: { name: "foo", description: "d", parameters: {} },
+                  readonly: false,
+                  type: "function",
+                  uri: "mcp://x/foo",
+                  group: "g",
+                  originalFunctionName: "foo",
+                },
+                output: [],
+              },
+            ],
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const state = (doc.chatHistory as any[])[0].toolCallStates[0];
+      expect("error" in state).toBe(false);
     });
   });
 });
