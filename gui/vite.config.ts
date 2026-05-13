@@ -1,11 +1,37 @@
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import react from "@vitejs/plugin-react-swc";
+import { execSync } from "child_process";
 import { resolve } from "path";
 import tailwindcss from "tailwindcss";
 import { defineConfig } from "vitest/config";
 
+// Capture git commit SHA and extension version for build-time injection
+const buildSha =
+  process.env.GITHUB_SHA ||
+  (() => {
+    try {
+      return execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+    } catch {
+      return "N/A";
+    }
+  })();
+
+// Read version from VSCode extension package.json
+const pkgPath = resolve(__dirname, "../extensions/vscode/package.json");
+let extensionVersion = "N/A";
+try {
+  const pkg = JSON.parse(require("fs").readFileSync(pkgPath, "utf-8"));
+  extensionVersion = pkg.version;
+} catch {
+  // ignore
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
+  define: {
+    "process.env.EXTENSION_BUILD_SHA": JSON.stringify(buildSha),
+    "process.env.EXTENSION_VERSION": JSON.stringify(extensionVersion),
+  },
   plugins: [
     react(),
     tailwindcss(),

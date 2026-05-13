@@ -1,8 +1,19 @@
-import { describe, expect, test } from "vitest";
-
 import { toSessionErrorInfo } from "./errorLocation";
 
 describe("toSessionErrorInfo", () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    // Reset env vars before each test
+    delete (process.env as any).EXTENSION_VERSION;
+    delete (process.env as any).EXTENSION_BUILD_SHA;
+  });
+
+  afterEach(() => {
+    // Restore original env after each test
+    Object.assign(process.env, originalEnv);
+  });
+
   test("Error with stack → real fileName/filePath/lineNumber", () => {
     const err = new Error("boom");
     err.stack =
@@ -117,9 +128,11 @@ describe("toSessionErrorInfo", () => {
     expect(info.stack).toContain("Request timed out");
   });
 
-  test("always returns all 5 schema keys (string types + integer line)", () => {
+  test("always returns all 7 schema keys (5 originals + extensionVersion/extensionCommit)", () => {
     const info = toSessionErrorInfo(undefined);
     expect(Object.keys(info).sort()).toEqual([
+      "extensionCommit",
+      "extensionVersion",
       "fileName",
       "filePath",
       "lineNumber",
@@ -132,5 +145,28 @@ describe("toSessionErrorInfo", () => {
     expect(Number.isInteger(info.lineNumber)).toBe(true);
     expect(typeof info.message).toBe("string");
     expect(typeof info.stack).toBe("string");
+    expect(typeof info.extensionVersion).toBe("string");
+    expect(typeof info.extensionCommit).toBe("string");
+  });
+
+  test("includes extensionVersion and extensionCommit from env vars", () => {
+    process.env.EXTENSION_VERSION = "1.5.0";
+    process.env.EXTENSION_BUILD_SHA =
+      "beef1234beef1234beef1234beef1234beef1234";
+
+    const info = toSessionErrorInfo(new Error("test error"));
+
+    expect(info.extensionVersion).toBe("1.5.0");
+    expect(info.extensionCommit).toBe(
+      "beef1234beef1234beef1234beef1234beef1234",
+    );
+  });
+
+  test("includes N/A for extensionVersion/extensionCommit when env vars missing", () => {
+    // Env vars should be deleted from beforeEach
+    const info = toSessionErrorInfo(new Error("test error"));
+
+    expect(info.extensionVersion).toBe("N/A");
+    expect(info.extensionCommit).toBe("N/A");
   });
 });

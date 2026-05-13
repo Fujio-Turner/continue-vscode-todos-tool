@@ -1,4 +1,3 @@
-import { beforeEach, describe, expect, it } from "vitest";
 import { Session } from "../index.js";
 import {
   buildSessionDocument,
@@ -13,26 +12,26 @@ describe("couchbaseSessionLogger", () => {
   });
 
   describe("loadCouchbaseConfig", () => {
-    it("returns null when env vars are missing", () => {
+    test("returns null when env vars are missing", () => {
       expect(loadCouchbaseConfig()).toBeNull();
     });
 
-    it("returns null when only endpoint is set", () => {
+    test("returns null when only endpoint is set", () => {
       process.env.CB_APP_ENDPOINT = "https://example.com";
       expect(loadCouchbaseConfig()).toBeNull();
     });
 
-    it("returns null when only username is set", () => {
+    test("returns null when only username is set", () => {
       process.env.CB_APP_USERNAME = "user";
       expect(loadCouchbaseConfig()).toBeNull();
     });
 
-    it("returns null when only password is set", () => {
+    test("returns null when only password is set", () => {
       process.env.CB_APP_PASSWORD = "pass";
       expect(loadCouchbaseConfig()).toBeNull();
     });
 
-    it("returns config when all env vars are set", () => {
+    test("returns config when all env vars are set", () => {
       process.env.CB_APP_ENDPOINT = "https://example.com/api";
       process.env.CB_APP_USERNAME = "testuser";
       process.env.CB_APP_PASSWORD = "testpass";
@@ -44,7 +43,7 @@ describe("couchbaseSessionLogger", () => {
       });
     });
 
-    it("trims whitespace from env vars", () => {
+    test("trims whitespace from env vars", () => {
       process.env.CB_APP_ENDPOINT = "  https://example.com  ";
       process.env.CB_APP_USERNAME = "  user  ";
       process.env.CB_APP_PASSWORD = "  pass  ";
@@ -56,7 +55,7 @@ describe("couchbaseSessionLogger", () => {
       });
     });
 
-    it("removes trailing slash from endpoint", () => {
+    test("removes trailing slash from endpoint", () => {
       process.env.CB_APP_ENDPOINT = "https://example.com/api/";
       process.env.CB_APP_USERNAME = "user";
       process.env.CB_APP_PASSWORD = "pass";
@@ -81,7 +80,7 @@ describe("couchbaseSessionLogger", () => {
       } as any,
     };
 
-    it("emits exactly the schema's required top-level keys", () => {
+    test("emits exactly the schema's required top-level keys", () => {
       const doc = buildSessionDocument(baseSession);
       expect(Object.keys(doc).sort()).toEqual([
         "chatHistory",
@@ -92,7 +91,7 @@ describe("couchbaseSessionLogger", () => {
       ]);
     });
 
-    it("includes the required field values", () => {
+    test("includes the required field values", () => {
       const doc = buildSessionDocument(baseSession);
       expect(doc.src).toBe("continue-vscode");
       expect(doc.sessionId).toBe("test-session-123");
@@ -101,7 +100,7 @@ describe("couchbaseSessionLogger", () => {
       expect(doc.chatHistory).toEqual([]);
     });
 
-    it("renames `history` -> `chatHistory` and preserves item count", () => {
+    test("renames `history` -> `chatHistory` and preserves item count", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -121,7 +120,7 @@ describe("couchbaseSessionLogger", () => {
       expect((doc as any).history).toBeUndefined();
     });
 
-    it("drops Continue/PouchDB extras at the top level", () => {
+    test("drops Continue/PouchDB extras at the top level", () => {
       const doc = buildSessionDocument(baseSession);
       expect((doc as any).mode).toBeUndefined();
       expect((doc as any).chatModelTitle).toBeUndefined();
@@ -131,7 +130,7 @@ describe("couchbaseSessionLogger", () => {
       expect((doc as any)._cv).toBeUndefined();
     });
 
-    it("strips appliedRules / editorState / isGatheringContext from history items", () => {
+    test("strips appliedRules / editorState / isGatheringContext from history items", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -149,7 +148,7 @@ describe("couchbaseSessionLogger", () => {
       expect(Object.keys(item).sort()).toEqual(["contextItems", "message"]);
     });
 
-    it("sanitizes ContextItem to schema's four required fields", () => {
+    test("sanitizes ContextItem to schema's four required fields", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -181,7 +180,7 @@ describe("couchbaseSessionLogger", () => {
       expect(ctx.id).toEqual({ providerTitle: "file", itemId: "abc" });
     });
 
-    it("sanitizes Message: keeps schema keys, drops extras", () => {
+    test("sanitizes Message: keeps schema keys, drops extras", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -215,7 +214,7 @@ describe("couchbaseSessionLogger", () => {
       });
     });
 
-    it("filters non-text parts from array message content", () => {
+    test("filters non-text parts from array message content", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -236,7 +235,7 @@ describe("couchbaseSessionLogger", () => {
       expect(content).toEqual([{ type: "text", text: "hello" }]);
     });
 
-    it("passes through string message content unchanged", () => {
+    test("passes through string message content unchanged", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -251,7 +250,7 @@ describe("couchbaseSessionLogger", () => {
       expect((doc.chatHistory as any[])[0].message.toolCallId).toBe("c1");
     });
 
-    it("normalizeStatus preserves errored/canceled and coerces transient states to done", () => {
+    test("normalizeStatus preserves errored/canceled and coerces transient states to done", () => {
       const baseToolCallState = {
         status: "errored",
         toolCall: {
@@ -295,7 +294,7 @@ describe("couchbaseSessionLogger", () => {
       ]);
     });
 
-    it("strips ToolDefinition extras and keeps the seven required keys", () => {
+    test("strips ToolDefinition extras and keeps the seven required keys", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -342,7 +341,7 @@ describe("couchbaseSessionLogger", () => {
       ]);
     });
 
-    it("strips ToolOutput extras (hidden/icon)", () => {
+    test("strips ToolOutput extras (hidden/icon)", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -391,7 +390,7 @@ describe("couchbaseSessionLogger", () => {
       ]);
     });
 
-    it("strips PromptLog extras (e.g. completionOptions)", () => {
+    test("strips PromptLog extras (e.g. completionOptions)", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -420,7 +419,7 @@ describe("couchbaseSessionLogger", () => {
       ]);
     });
 
-    it("normalizes singular toolCallState -> plural toolCallStates", () => {
+    test("normalizes singular toolCallState -> plural toolCallStates", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -457,7 +456,7 @@ describe("couchbaseSessionLogger", () => {
       expect(item.toolCallState).toBeUndefined();
     });
 
-    it("produces a JSON-serializable document with special sessionId chars", () => {
+    test("produces a JSON-serializable document with special sessionId chars", () => {
       const session: Session = {
         ...baseSession,
         sessionId: "test/session?id=123&foo=bar",
@@ -467,7 +466,7 @@ describe("couchbaseSessionLogger", () => {
       expect(() => JSON.stringify(doc)).not.toThrow();
     });
 
-    it("includes the schema-aligned error block when session.error is set", () => {
+    test("includes the schema-aligned error block when session.error is set", () => {
       const session: Session = {
         ...baseSession,
         error: {
@@ -476,6 +475,8 @@ describe("couchbaseSessionLogger", () => {
           lineNumber: 132,
           message: "ENOSPC: no space left on device",
           stack: "Error: ENOSPC...\n    at HistoryManager.save (...:132:5)",
+          extensionVersion: "1.3.39",
+          extensionCommit: "affc6394f09964950387c286ff8b28c610f88736",
         },
       };
       const doc = buildSessionDocument(session);
@@ -485,9 +486,13 @@ describe("couchbaseSessionLogger", () => {
         lineNumber: 132,
         message: "ENOSPC: no space left on device",
         stack: "Error: ENOSPC...\n    at HistoryManager.save (...:132:5)",
+        extensionVersion: "1.3.39",
+        extensionCommit: "affc6394f09964950387c286ff8b28c610f88736",
       });
-      // Schema requires all five keys when `error` is present
+      // Schema requires all seven keys when `error` is present
       expect(Object.keys((doc as any).error).sort()).toEqual([
+        "extensionCommit",
+        "extensionVersion",
         "fileName",
         "filePath",
         "lineNumber",
@@ -496,7 +501,7 @@ describe("couchbaseSessionLogger", () => {
       ]);
     });
 
-    it("supports N/A sentinels (timeout/network errors)", () => {
+    test("supports N/A sentinels (timeout/network errors)", () => {
       const session: Session = {
         ...baseSession,
         error: {
@@ -505,6 +510,8 @@ describe("couchbaseSessionLogger", () => {
           lineNumber: -1,
           message: "fetch failed",
           stack: "N/A",
+          extensionVersion: "1.3.39",
+          extensionCommit: "N/A",
         },
       };
       const doc = buildSessionDocument(session);
@@ -512,14 +519,16 @@ describe("couchbaseSessionLogger", () => {
       expect((doc as any).error.filePath).toBe("N/A");
       expect((doc as any).error.lineNumber).toBe(-1);
       expect(typeof (doc as any).error.lineNumber).toBe("number");
+      expect((doc as any).error.extensionVersion).toBe("1.3.39");
+      expect((doc as any).error.extensionCommit).toBe("N/A");
     });
 
-    it("omits the error key entirely when session.error is undefined", () => {
+    test("omits the error key entirely when session.error is undefined", () => {
       const doc = buildSessionDocument(baseSession);
       expect("error" in doc).toBe(false);
     });
 
-    it("output omits an undefined message id rather than emitting `undefined`", () => {
+    test("output omits an undefined message id rather than emitting `undefined`", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -534,7 +543,7 @@ describe("couchbaseSessionLogger", () => {
       expect("id" in msg).toBe(false);
     });
 
-    it("sanitizes an errored state with structured code/message", () => {
+    test("sanitizes an errored state with structured code/message", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -591,7 +600,7 @@ describe("couchbaseSessionLogger", () => {
       expect(state.error.rawStatus).toBe("errored");
     });
 
-    it("sanitizes an errored state with malformed output, defaulting to UNKNOWN", () => {
+    test("sanitizes an errored state with malformed output, defaulting to UNKNOWN", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -635,7 +644,7 @@ describe("couchbaseSessionLogger", () => {
       expect(state.error.message).toBe("boom: something went wrong");
     });
 
-    it("sanitizes a canceled state", () => {
+    test("sanitizes a canceled state", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -680,7 +689,7 @@ describe("couchbaseSessionLogger", () => {
       expect(state.error.rawStatus).toBe("canceled");
     });
 
-    it("normalizes generating/generated/calling to done with no error", () => {
+    test("normalizes generating/generated/calling to done with no error", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -718,7 +727,7 @@ describe("couchbaseSessionLogger", () => {
       expect("error" in state).toBe(false);
     });
 
-    it("buildSessionDocument collects one toolErrors[] entry per errored tool call", () => {
+    test("buildSessionDocument collects one toolErrors[] entry per errored tool call", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -777,7 +786,7 @@ describe("couchbaseSessionLogger", () => {
       );
     });
 
-    it("omits toolErrors[] entirely when session has no failures", () => {
+    test("omits toolErrors[] entirely when session has no failures", () => {
       const session: Session = {
         ...baseSession,
         history: [
@@ -813,7 +822,7 @@ describe("couchbaseSessionLogger", () => {
       expect("toolErrors" in doc).toBe(false);
     });
 
-    it("sanitizeToolCallState for a done state has no error key", () => {
+    test("sanitizeToolCallState for a done state has no error key", () => {
       const session: Session = {
         ...baseSession,
         history: [

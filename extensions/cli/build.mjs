@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import * as esbuild from "esbuild";
-import { chmodSync, copyFileSync, writeFileSync } from "fs";
+import { chmodSync, copyFileSync, readFileSync, writeFileSync } from "fs";
+import { execSync } from "child_process";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 
@@ -10,6 +11,27 @@ const args = process.argv.slice(2);
 const noMinify = args.includes("--no-minify");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Capture git commit SHA and extension version for build-time injection
+const buildSha =
+  process.env.GITHUB_SHA ||
+  (() => {
+    try {
+      return execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+    } catch {
+      return "N/A";
+    }
+  })();
+
+// Read version from VSCode extension package.json
+const pkgPath = resolve(__dirname, "../../extensions/vscode/package.json");
+let extensionVersion = "N/A";
+try {
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+  extensionVersion = pkg.version;
+} catch {
+  // ignore
+}
 
 // List of packages to mark as external (ONLY native modules that cannot be bundled)
 // Note: Everything else will be bundled to create a self-contained CLI
@@ -45,6 +67,10 @@ try {
     sourcemap: true,
     minify: !noMinify, // Use --no-minify flag to control minification
     metafile: true,
+    define: {
+      "process.env.EXTENSION_BUILD_SHA": JSON.stringify(buildSha),
+      "process.env.EXTENSION_VERSION": JSON.stringify(extensionVersion),
+    },
     plugins: [optionalDevtoolsPlugin],
 
     // Handle .js extensions in imports

@@ -1,9 +1,11 @@
 import * as path from "path";
+import { getExtensionInfo } from "./extensionInfo.js";
 
 /**
  * Schema-aligned error block for Session.error. Mirrors the shape required by
  * .grokcoder/guides/chat-session-history-schema.json (keys: fileName,
- * filePath, lineNumber, message, stack — all required when present).
+ * filePath, lineNumber, message, stack, extensionVersion, extensionCommit —
+ * all required when present).
  */
 export interface SessionErrorInfo {
   fileName: string;
@@ -11,6 +13,8 @@ export interface SessionErrorInfo {
   lineNumber: number;
   message: string;
   stack: string;
+  extensionVersion: string;
+  extensionCommit: string;
 }
 
 const NA_STRING = "N/A";
@@ -56,6 +60,7 @@ function isInternalFrame(filePath: string): boolean {
  * Convert any thrown value into a schema-conformant error block.
  * - Falls back to "N/A" for missing string fields.
  * - Falls back to -1 for an unknown line number (the schema requires integer).
+ * - Includes extensionVersion and extensionCommit from build-time env vars.
  */
 export function toSessionErrorInfo(err: unknown): SessionErrorInfo {
   let message = NA_STRING;
@@ -106,5 +111,15 @@ export function toSessionErrorInfo(err: unknown): SessionErrorInfo {
     }
   }
 
-  return { fileName, filePath, lineNumber, message, stack };
+  const { extensionVersion, extensionCommit } = getExtensionInfo();
+
+  return {
+    fileName,
+    filePath,
+    lineNumber,
+    message,
+    stack,
+    extensionVersion,
+    extensionCommit,
+  };
 }

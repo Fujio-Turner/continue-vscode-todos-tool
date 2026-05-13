@@ -299,6 +299,8 @@ export function buildSessionDocument(
       lineNumber: session.error.lineNumber,
       message: session.error.message,
       stack: session.error.stack,
+      extensionVersion: session.error.extensionVersion,
+      extensionCommit: session.error.extensionCommit,
     };
   }
   const toolErrors = collectToolErrors(session.history ?? []);

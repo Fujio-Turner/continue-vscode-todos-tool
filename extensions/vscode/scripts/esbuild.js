@@ -1,10 +1,24 @@
 const fs = require("fs");
+const { execSync } = require("child_process");
 
 const { writeBuildTimestamp } = require("./utils");
 
 const esbuild = require("esbuild");
 
 const flags = process.argv.slice(2);
+
+// Capture git commit SHA and extension version for build-time injection
+const buildSha =
+  process.env.GITHUB_SHA ||
+  (() => {
+    try {
+      return execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+    } catch {
+      return "N/A";
+    }
+  })();
+
+const pkg = require("../package.json");
 
 const esbuildConfig = {
   entryPoints: ["src/extension.ts"],
@@ -22,7 +36,11 @@ const esbuildConfig = {
   // To allow import.meta.path for transformers.js
   // https://github.com/evanw/esbuild/issues/1492#issuecomment-893144483
   inject: ["./scripts/importMetaUrl.js"],
-  define: { "import.meta.url": "importMetaUrl" },
+  define: {
+    "import.meta.url": "importMetaUrl",
+    "process.env.EXTENSION_BUILD_SHA": JSON.stringify(buildSha),
+    "process.env.EXTENSION_VERSION": JSON.stringify(pkg.version),
+  },
   supported: { "dynamic-import": false },
   metafile: true,
   plugins: [

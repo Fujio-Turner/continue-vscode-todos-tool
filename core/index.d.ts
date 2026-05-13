@@ -287,6 +287,10 @@ export interface SessionError {
   message: string;
   /** Full stack trace, or "N/A". */
   stack: string;
+  /** Extension version from package.json, or "N/A". */
+  extensionVersion: string;
+  /** Git commit SHA baked in at build time, or "N/A". */
+  extensionCommit: string;
 }
 
 export interface Session {
