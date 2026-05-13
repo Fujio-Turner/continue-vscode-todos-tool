@@ -253,7 +253,10 @@ function sanitizeHistoryItem(item: any): Record<string, unknown> {
  * Collect session-level summary of all failed tool invocations.
  * One entry per errored/canceled tool call across the whole session.
  */
-function collectToolErrors(history: any[]): Array<Record<string, unknown>> {
+function collectToolErrors(
+  history: any[],
+  nowIso: string,
+): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   history.forEach((item, historyIndex) => {
     const states = Array.isArray(item?.toolCallStates)
@@ -271,6 +274,7 @@ function collectToolErrors(history: any[]): Array<Record<string, unknown>> {
           "N/A",
         code: err.code,
         message: err.message,
+        created_at: nowIso,
       });
     }
   });
@@ -285,6 +289,7 @@ function collectToolErrors(history: any[]): Array<Record<string, unknown>> {
 export function buildSessionDocument(
   session: Session,
 ): Record<string, unknown> {
+  const nowIso = new Date().toISOString();
   const doc: Record<string, unknown> = {
     src: COUCHBASE_SOURCE,
     sessionId: session.sessionId,
@@ -301,9 +306,10 @@ export function buildSessionDocument(
       stack: session.error.stack,
       extensionVersion: session.error.extensionVersion,
       extensionCommit: session.error.extensionCommit,
+      created_at: nowIso,
     };
   }
-  const toolErrors = collectToolErrors(session.history ?? []);
+  const toolErrors = collectToolErrors(session.history ?? [], nowIso);
   if (toolErrors.length > 0) doc.toolErrors = toolErrors;
   return doc;
 }

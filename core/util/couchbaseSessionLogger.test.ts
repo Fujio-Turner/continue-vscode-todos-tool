@@ -480,7 +480,8 @@ describe("couchbaseSessionLogger", () => {
         },
       };
       const doc = buildSessionDocument(session);
-      expect((doc as any).error).toEqual({
+      const { created_at, ...errorWithoutTimestamp } = (doc as any).error;
+      expect(errorWithoutTimestamp).toEqual({
         fileName: "history.ts",
         filePath: "/abs/core/util/history.ts",
         lineNumber: 132,
@@ -489,8 +490,9 @@ describe("couchbaseSessionLogger", () => {
         extensionVersion: "1.3.39",
         extensionCommit: "affc6394f09964950387c286ff8b28c610f88736",
       });
-      // Schema requires all seven keys when `error` is present
+      // Schema requires all eight keys when `error` is present
       expect(Object.keys((doc as any).error).sort()).toEqual([
+        "created_at",
         "extensionCommit",
         "extensionVersion",
         "fileName",
@@ -499,6 +501,48 @@ describe("couchbaseSessionLogger", () => {
         "message",
         "stack",
       ]);
+    });
+
+    test("error.created_at is an ISO 8601 UTC timestamp with millisecond precision", () => {
+      const session: Session = {
+        ...baseSession,
+        error: {
+          fileName: "history.ts",
+          filePath: "/abs/core/util/history.ts",
+          lineNumber: 132,
+          message: "ENOSPC",
+          stack: "Error: ENOSPC...",
+          extensionVersion: "1.3.39",
+          extensionCommit: "abc",
+        },
+      };
+      const doc = buildSessionDocument(session);
+      const ts = (doc as any).error.created_at;
+      expect(typeof ts).toBe("string");
+      expect(ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    });
+
+    test("error.created_at uses the deterministic system time", () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date("2026-05-13T17:42:09.123Z"));
+      try {
+        const session: Session = {
+          ...baseSession,
+          error: {
+            fileName: "x",
+            filePath: "x",
+            lineNumber: 1,
+            message: "x",
+            stack: "x",
+            extensionVersion: "x",
+            extensionCommit: "x",
+          },
+        };
+        const doc = buildSessionDocument(session);
+        expect((doc as any).error.created_at).toBe("2026-05-13T17:42:09.123Z");
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     test("supports N/A sentinels (timeout/network errors)", () => {
@@ -784,6 +828,62 @@ describe("couchbaseSessionLogger", () => {
       expect(toolErrors[0].message).toContain(
         "analyze_metadata tool is currently disabled",
       );
+      expect(toolErrors[0].created_at).toMatch(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+      );
+    });
+
+    test("session-level error.created_at and toolErrors[].created_at share a single timestamp", () => {
+      const erroredToolCallState = {
+        status: "errored",
+        toolCall: {
+          id: "call_1",
+          type: "function",
+          function: { name: "foo", arguments: "{}" },
+        },
+        toolCallId: "call_1",
+        parsedArgs: {},
+        tool: {
+          displayTitle: "foo",
+          function: { name: "foo", description: "d", parameters: {} },
+          readonly: false,
+          type: "function",
+          uri: "mcp://x/foo",
+          group: "g",
+          originalFunctionName: "foo",
+        },
+        output: [
+          {
+            name: "Tool Call Error",
+            description: "Tool Call Failed",
+            content: "boom",
+          },
+        ],
+      };
+      const session: Session = {
+        ...baseSession,
+        error: {
+          fileName: "x",
+          filePath: "x",
+          lineNumber: 1,
+          message: "x",
+          stack: "x",
+          extensionVersion: "x",
+          extensionCommit: "x",
+        },
+        history: [
+          {
+            message: { role: "assistant", content: "" },
+            contextItems: [],
+            toolCallStates: [erroredToolCallState, erroredToolCallState],
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const toolErrors = (doc as any).toolErrors as any[];
+      expect(toolErrors.length).toBe(2);
+      expect(toolErrors[0].created_at).toBe((doc as any).error.created_at);
+      expect(toolErrors[1].created_at).toBe((doc as any).error.created_at);
     });
 
     test("omits toolErrors[] entirely when session has no failures", () => {
