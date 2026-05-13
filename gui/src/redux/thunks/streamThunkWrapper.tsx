@@ -1,4 +1,5 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
+import { toSessionErrorInfo } from "core/util/errorLocation";
 import posthog from "posthog-js";
 import StreamErrorDialog from "../../pages/gui/StreamError";
 import { analyzeError } from "../../util/errorAnalysis";
@@ -44,5 +45,22 @@ export const streamThunkWrapper = createAsyncThunk<
     };
 
     posthog.capture("gui_stream_error", errorData);
+
+    // Persist the error onto the session so it lands in the local JSON file
+    // and the Couchbase mirror with file/line context (or "N/A" / -1 when
+    // unavailable, e.g. network/timeout errors).
+    if (!state.session.isInEdit) {
+      try {
+        await dispatch(
+          saveCurrentSession({
+            openNewSession: false,
+            generateTitle: false,
+            error: toSessionErrorInfo(e),
+          }),
+        );
+      } catch (saveErr) {
+        console.error("Failed to save session error context", saveErr);
+      }
+    }
   }
 });

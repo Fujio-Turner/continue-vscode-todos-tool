@@ -1,5 +1,5 @@
 import { createAsyncThunk, unwrapResult } from "@reduxjs/toolkit";
-import { BaseSessionMetadata, ChatMessage, Session } from "core";
+import { BaseSessionMetadata, ChatMessage, Session, SessionError } from "core";
 import { RemoteSessionMetadata } from "core/control-plane/client";
 import { NEW_SESSION_TITLE } from "core/util/constants";
 import { renderChatMessage } from "core/util/messageContent";
@@ -229,11 +229,14 @@ function getChatTitleFromMessage(message: ChatMessage) {
 
 export const saveCurrentSession = createAsyncThunk<
   void,
-  { openNewSession: boolean; generateTitle: boolean },
+  { openNewSession: boolean; generateTitle: boolean; error?: SessionError },
   ThunkApiType
 >(
   "session/saveCurrent",
-  async ({ openNewSession, generateTitle }, { dispatch, extra, getState }) => {
+  async (
+    { openNewSession, generateTitle, error },
+    { dispatch, extra, getState },
+  ) => {
     const session = getState().session; // assign to a variable so that even when current session changes, we have the reference to the old session
     if (session.history.length === 0) {
       return;
@@ -298,6 +301,7 @@ export const saveCurrentSession = createAsyncThunk<
       history: session.history,
       mode: session.mode,
       chatModelTitle: selectedChatModel?.title ?? null,
+      ...(error ? { error } : {}),
     };
 
     const result = await dispatch(updateSession(updatedSession));

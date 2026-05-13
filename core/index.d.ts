@@ -276,6 +276,23 @@ export interface SessionUsage extends Usage {
   totalCost: number;
 }
 
+export interface SessionError {
+  /** File name (basename) where the error originated, or "N/A". */
+  fileName: string;
+  /** Absolute path to the file where the error originated, or "N/A". */
+  filePath: string;
+  /** 1-based line number where the error originated, or -1 when unknown. */
+  lineNumber: number;
+  /** Error message, or "N/A". */
+  message: string;
+  /** Full stack trace, or "N/A". */
+  stack: string;
+  /** Extension version from package.json, or "N/A". */
+  extensionVersion: string;
+  /** Git commit SHA baked in at build time, or "N/A". */
+  extensionCommit: string;
+}
+
 export interface Session {
   sessionId: string;
   title: string;
@@ -287,6 +304,8 @@ export interface Session {
   chatModelTitle?: string | null;
   /** Optional: cumulative usage and cost for all LLM API calls in this session */
   usage?: SessionUsage;
+  /** Optional: details of the most recent stream error, schema-aligned. */
+  error?: SessionError;
 }
 
 export interface BaseSessionMetadata {
