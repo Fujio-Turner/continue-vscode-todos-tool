@@ -380,32 +380,35 @@ export async function logSessionToCouchbase(session: Session): Promise<void> {
         }
 
         const rev = existingDoc?._rev;
-        const patchBody = rev ? { ...body, _rev: rev } : body;
+        const updateUrl = rev ? `${url}?rev=${encodeURIComponent(rev)}` : url;
+        const updateBody = rev ? { ...body, _rev: rev } : body;
 
-        const patchResponse = await fetch(url, {
-          method: "PATCH",
+        const updateResponse = await fetch(updateUrl, {
+          method: "PUT",
           headers: {
             Authorization: authHeader,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(patchBody),
+          body: JSON.stringify(updateBody),
         });
 
         let extra: string | undefined;
-        if (patchResponse.status === 201) {
+        if (updateResponse.status === 201) {
           try {
-            const patchJson = (await patchResponse.json()) as Record<
+            const updateJson = (await updateResponse.json()) as Record<
               string,
               any
             >;
-            if (patchJson?._rev) {
-              extra = `(rev=${patchJson._rev})`;
+            if (updateJson?.rev) {
+              extra = `(rev=${updateJson.rev})`;
+            } else if (updateJson?._rev) {
+              extra = `(rev=${updateJson._rev})`;
             }
           } catch {
             // ignore body parse errors
           }
         }
-        debug("PATCH", url, patchResponse.status, extra);
+        debug("PUT (update)", updateUrl, updateResponse.status, extra);
       } else if (getResponse.status === 404) {
         // Document doesn't exist — PUT
         const putResponse = await fetch(url, {
