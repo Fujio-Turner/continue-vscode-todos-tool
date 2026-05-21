@@ -80,8 +80,23 @@ describe("couchbaseSessionLogger", () => {
       } as any,
     };
 
-    test("emits exactly the schema's required top-level keys", () => {
+    test("emits exactly the schema's required top-level keys plus sessionUsage when present", () => {
       const doc = buildSessionDocument(baseSession);
+      // baseSession has usage defined, so sessionUsage is emitted.
+      expect(Object.keys(doc).sort()).toEqual([
+        "chatHistory",
+        "sessionId",
+        "sessionUsage",
+        "src",
+        "title",
+        "workspaceDirectory",
+      ]);
+    });
+
+    test("omits sessionUsage when session.usage is absent", () => {
+      const session: Session = { ...baseSession, usage: undefined };
+      const doc = buildSessionDocument(session);
+      expect((doc as any).sessionUsage).toBeUndefined();
       expect(Object.keys(doc).sort()).toEqual([
         "chatHistory",
         "sessionId",
@@ -124,6 +139,7 @@ describe("couchbaseSessionLogger", () => {
       const doc = buildSessionDocument(baseSession);
       expect((doc as any).mode).toBeUndefined();
       expect((doc as any).chatModelTitle).toBeUndefined();
+      // Note: `usage` is intentionally surfaced as the schema-aligned `sessionUsage`.
       expect((doc as any).usage).toBeUndefined();
       expect((doc as any)._id).toBeUndefined();
       expect((doc as any)._rev).toBeUndefined();
@@ -145,7 +161,14 @@ describe("couchbaseSessionLogger", () => {
       };
       const doc = buildSessionDocument(session);
       const item = (doc.chatHistory as any[])[0];
-      expect(Object.keys(item).sort()).toEqual(["contextItems", "message"]);
+      // appliedRules / editorState / isGatheringContext are stripped;
+      // timing/usage are always emitted (sentinels when absent).
+      expect(Object.keys(item).sort()).toEqual([
+        "contextItems",
+        "message",
+        "timing",
+        "usage",
+      ]);
     });
 
     test("sanitizes ContextItem to schema's four required fields", () => {
@@ -957,6 +980,464 @@ describe("couchbaseSessionLogger", () => {
       const doc = buildSessionDocument(session);
       const state = (doc.chatHistory as any[])[0].toolCallStates[0];
       expect("error" in state).toBe(false);
+    });
+
+    test("emits timing and usage on every chatHistory item with sentinels when missing", () => {
+      const now = Date.now();
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: {
+              role: "user",
+              content: "hello",
+              usage: { promptTokens: 10, completionTokens: 0, totalTokens: 10 },
+            },
+            contextItems: [],
+            timing: {
+              startedAt: now,
+              endedAt: now + 1000,
+              durationMs: 1000,
+            },
+          } as any,
+          {
+            message: { role: "assistant", content: "hi" },
+            contextItems: [],
+            // Missing timing and usage: should get sentinels
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const history = doc.chatHistory as any[];
+
+      // First item has real timing/usage
+      expect(history[0].timing).toBeDefined();
+      expect(history[0].timing.durationMs).toBe(1000);
+      expect(history[0].timing.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}/); // ISO date
+      expect(history[0].usage).toBeDefined();
+      expect(history[0].usage.promptTokens).toBe(10);
+
+      // Second item should have sentinels
+      expect(history[1].timing).toBeDefined();
+      expect(history[1].timing.durationMs).toBe(-1);
+      expect(history[1].timing.startedAt).toBe("N/A");
+      expect(history[1].usage).toBeDefined();
+      expect(history[1].usage.promptTokens).toBe(-1);
+      expect(history[1].usage.completionTokens).toBe(-1);
+    });
+
+    test("emits timing and usage on every toolCallState with sentinels when missing", () => {
+      const now = Date.now();
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "assistant", content: "" },
+            contextItems: [],
+            toolCallStates: [
+              {
+                status: "done",
+                toolCall: {
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "foo", arguments: "{}" },
+                },
+                toolCallId: "call_1",
+                parsedArgs: {},
+                tool: {
+                  displayTitle: "foo",
+                  function: { name: "foo", description: "d", parameters: {} },
+                  readonly: false,
+                  type: "function",
+                  uri: "mcp://x/foo",
+                  group: "g",
+                  originalFunctionName: "foo",
+                },
+                output: [],
+                timing: {
+                  startedAt: now,
+                  endedAt: now + 500,
+                  durationMs: 500,
+                },
+                usage: {
+                  promptTokens: 5,
+                  completionTokens: 2,
+                  totalTokens: 7,
+                },
+              },
+              {
+                status: "done",
+                toolCall: {
+                  id: "call_2",
+                  type: "function",
+                  function: { name: "bar", arguments: "{}" },
+                },
+                toolCallId: "call_2",
+                parsedArgs: {},
+                tool: {
+                  displayTitle: "bar",
+                  function: { name: "bar", description: "d", parameters: {} },
+                  readonly: false,
+                  type: "function",
+                  uri: "mcp://x/bar",
+                  group: "g",
+                  originalFunctionName: "bar",
+                },
+                output: [],
+                // Missing timing and usage
+              },
+            ],
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const states = (doc.chatHistory as any[])[0].toolCallStates;
+
+      // First tool call has real timing/usage
+      expect(states[0].timing).toBeDefined();
+      expect(states[0].timing.durationMs).toBe(500);
+      expect(states[0].usage.promptTokens).toBe(5);
+
+      // Second tool call should have sentinels
+      expect(states[1].timing).toBeDefined();
+      expect(states[1].timing.durationMs).toBe(-1);
+      expect(states[1].usage.promptTokens).toBe(-1);
+    });
+
+    test("durationMs is calculated correctly from startedAt/endedAt", () => {
+      const now = Date.now();
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "user", content: "hi" },
+            contextItems: [],
+            timing: {
+              startedAt: now,
+              endedAt: now + 2500,
+              durationMs: 2500,
+            },
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const item = (doc.chatHistory as any[])[0];
+      expect(item.timing.durationMs).toBe(2500);
+    });
+
+    test("totalTokens is derived from promptTokens + completionTokens", () => {
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "user", content: "hi" },
+            contextItems: [],
+            usage: {
+              promptTokens: 100,
+              completionTokens: 50,
+              totalTokens: 150,
+            },
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const item = (doc.chatHistory as any[])[0];
+      expect(item.usage.totalTokens).toBe(150);
+    });
+
+    test("totalTokens is -1 when either promptTokens or completionTokens is missing", () => {
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "user", content: "hi" },
+            contextItems: [],
+            usage: {
+              promptTokens: 100,
+              completionTokens: undefined,
+              totalTokens: undefined,
+            },
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const item = (doc.chatHistory as any[])[0];
+      expect(item.usage.totalTokens).toBe(-1);
+    });
+
+    test("optional cachedTokens and reasoningTokens are included when present", () => {
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "user", content: "hi" },
+            contextItems: [],
+            usage: {
+              promptTokens: 100,
+              completionTokens: 50,
+              totalTokens: 150,
+              promptTokensDetails: { cachedTokens: 10 },
+              completionTokensDetails: { reasoningTokens: 5 },
+            },
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const item = (doc.chatHistory as any[])[0];
+      expect(item.usage.cachedTokens).toBe(10);
+      expect(item.usage.reasoningTokens).toBe(5);
+    });
+
+    test("history items include timing and usage in required fields check", () => {
+      const now = Date.now();
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "user", content: "hi" },
+            contextItems: [],
+            timing: {
+              startedAt: now,
+              endedAt: now + 1000,
+              durationMs: 1000,
+            },
+            usage: {
+              promptTokens: 10,
+              completionTokens: 20,
+              totalTokens: 30,
+            },
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const item = (doc.chatHistory as any[])[0];
+      expect(Object.keys(item).sort()).toContain("timing");
+      expect(Object.keys(item).sort()).toContain("usage");
+      expect(item.timing).toHaveProperty("startedAt");
+      expect(item.timing).toHaveProperty("endedAt");
+      expect(item.timing).toHaveProperty("durationMs");
+      expect(item.usage).toHaveProperty("promptTokens");
+      expect(item.usage).toHaveProperty("completionTokens");
+      expect(item.usage).toHaveProperty("totalTokens");
+    });
+
+    test("toolCallStates include timing and usage in required fields check", () => {
+      const now = Date.now();
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "assistant", content: "" },
+            contextItems: [],
+            toolCallStates: [
+              {
+                status: "done",
+                toolCall: {
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "foo", arguments: "{}" },
+                },
+                toolCallId: "call_1",
+                parsedArgs: {},
+                tool: {
+                  displayTitle: "foo",
+                  function: { name: "foo", description: "d", parameters: {} },
+                  readonly: false,
+                  type: "function",
+                  uri: "mcp://x/foo",
+                  group: "g",
+                  originalFunctionName: "foo",
+                },
+                output: [],
+                timing: {
+                  startedAt: now,
+                  endedAt: now + 500,
+                  durationMs: 500,
+                },
+                usage: {
+                  promptTokens: 5,
+                  completionTokens: 2,
+                  totalTokens: 7,
+                },
+              },
+            ],
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const state = (doc.chatHistory as any[])[0].toolCallStates[0];
+      expect(Object.keys(state).sort()).toContain("timing");
+      expect(Object.keys(state).sort()).toContain("usage");
+      expect(state.timing).toHaveProperty("startedAt");
+      expect(state.timing).toHaveProperty("endedAt");
+      expect(state.timing).toHaveProperty("durationMs");
+      expect(state.usage).toHaveProperty("promptTokens");
+      expect(state.usage).toHaveProperty("completionTokens");
+      expect(state.usage).toHaveProperty("totalTokens");
+    });
+
+    // -----------------------------------------------------------------------
+    // Couchbase token-usage enrichment (couchbase-token-usage-enrichment-plan)
+    // -----------------------------------------------------------------------
+
+    test("emits sessionUsage mirroring Session.usage when present", () => {
+      const session: Session = {
+        ...baseSession,
+        usage: {
+          promptTokens: 1234,
+          completionTokens: 567,
+          totalTokens: 1801,
+          totalCost: 0.0123,
+          promptTokensDetails: {
+            cachedTokens: 100,
+            cacheWriteTokens: 50,
+          },
+        } as any,
+      };
+      const doc = buildSessionDocument(session);
+      expect(doc.sessionUsage).toBeDefined();
+      const su = doc.sessionUsage as any;
+      expect(su.promptTokens).toBe(1234);
+      expect(su.completionTokens).toBe(567);
+      expect(su.totalTokens).toBe(1801);
+      expect(su.cachedTokens).toBe(100);
+      expect(su.cacheWriteTokens).toBe(50);
+      expect(su.totalCost).toBe(0.0123);
+    });
+
+    test("sessionUsage.totalCost preserves number type (not coerced to integer)", () => {
+      const session: Session = {
+        ...baseSession,
+        usage: {
+          promptTokens: 10,
+          completionTokens: 5,
+          totalTokens: 15,
+          totalCost: 0.000123,
+        } as any,
+      };
+      const doc = buildSessionDocument(session);
+      expect((doc.sessionUsage as any).totalCost).toBe(0.000123);
+      expect(typeof (doc.sessionUsage as any).totalCost).toBe("number");
+    });
+
+    test("per-turn usage surfaces cacheWriteTokens from promptTokensDetails", () => {
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "assistant", content: "hi" },
+            contextItems: [],
+            usage: {
+              promptTokens: 100,
+              completionTokens: 50,
+              totalTokens: 150,
+              promptTokensDetails: {
+                cachedTokens: 20,
+                cacheWriteTokens: 30,
+              },
+            },
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const item = (doc.chatHistory as any[])[0];
+      expect(item.usage.cachedTokens).toBe(20);
+      expect(item.usage.cacheWriteTokens).toBe(30);
+    });
+
+    test("per-turn usage includes totalCost, model, and modelProvider when present", () => {
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "assistant", content: "hi" },
+            contextItems: [],
+            usage: {
+              promptTokens: 10,
+              completionTokens: 5,
+              totalTokens: 15,
+              totalCost: 0.0045,
+              model: "claude-3-5-sonnet",
+              modelProvider: "anthropic",
+            },
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const item = (doc.chatHistory as any[])[0];
+      expect(item.usage.totalCost).toBe(0.0045);
+      expect(item.usage.model).toBe("claude-3-5-sonnet");
+      expect(item.usage.modelProvider).toBe("anthropic");
+    });
+
+    test("per-turn usage accepts CLI snake_case fullUsage shape (prompt_tokens/completion_tokens)", () => {
+      // CLI stores raw OpenAI-style chunk.usage as message.usage; without snake_case
+      // support, sanitizeUsage emits -1 for every token field.
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: {
+              role: "assistant",
+              content: "hi",
+              usage: {
+                prompt_tokens: 1234,
+                completion_tokens: 56,
+                total_tokens: 1290,
+                prompt_tokens_details: {
+                  cached_tokens: 100,
+                  cache_read_tokens: 80,
+                  cache_write_tokens: 20,
+                },
+                completion_tokens_details: {
+                  reasoning_tokens: 8,
+                },
+                model: "gpt-4o",
+                cost_cents: 12,
+              },
+            },
+            contextItems: [],
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const usage = (doc.chatHistory as any[])[0].usage;
+      expect(usage.promptTokens).toBe(1234);
+      expect(usage.completionTokens).toBe(56);
+      expect(usage.totalTokens).toBe(1290);
+      expect(usage.cachedTokens).toBe(100);
+      expect(usage.cacheReadTokens).toBe(80);
+      expect(usage.cacheWriteTokens).toBe(20);
+      expect(usage.reasoningTokens).toBe(8);
+      expect(usage.model).toBe("gpt-4o");
+      expect(usage.totalCost).toBeCloseTo(0.12);
+    });
+
+    test("promptLogs surface promptTokens and completionTokens when provided", () => {
+      const session: Session = {
+        ...baseSession,
+        history: [
+          {
+            message: { role: "assistant", content: "hi" },
+            contextItems: [],
+            promptLogs: [
+              {
+                modelTitle: "GPT-4",
+                modelProvider: "openai",
+                prompt: "p",
+                completion: "c",
+                promptTokens: 42,
+                completionTokens: 17,
+              },
+            ],
+          } as any,
+        ],
+      };
+      const doc = buildSessionDocument(session);
+      const log = (doc.chatHistory as any[])[0].promptLogs[0];
+      expect(log.promptTokens).toBe(42);
+      expect(log.completionTokens).toBe(17);
+      expect(log.modelTitle).toBe("GPT-4");
     });
   });
 });

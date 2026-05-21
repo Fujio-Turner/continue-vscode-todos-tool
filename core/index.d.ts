@@ -531,6 +531,12 @@ interface McpUiState {
   content: McpUiResourceContents;
 }
 
+export interface Timing {
+  startedAt: number; // epoch ms (in-memory); serialized as ISO date-time
+  endedAt: number; // epoch ms
+  durationMs: number;
+}
+
 // Will exist only on "assistant" messages with tool calls
 interface ToolCallState {
   toolCallId: string;
@@ -541,6 +547,8 @@ interface ToolCallState {
   output?: ContextItem[];
   tool?: Tool;
   mcpUiState?: McpUiState;
+  timing?: Timing; // optional in-memory; sanitizer fills sentinels before write
+  usage?: Usage; // optional in-memory; computed at end-of-call
 }
 
 interface Reasoning {
@@ -561,6 +569,8 @@ export interface ChatHistoryItem {
   reasoning?: Reasoning;
   appliedRules?: RuleMetadata[];
   conversationSummary?: string;
+  timing?: Timing; // optional in-memory; sanitizer fills sentinels before write
+  usage?: Usage; // optional in-memory; computed at turn completion
 }
 
 export interface LLMFullCompletionOptions extends BaseCompletionOptions {
