@@ -12,13 +12,15 @@ import {
   setActive,
   setAppliedRulesAtIndex,
   setContextPercentage,
+  setHistoryItemTiming,
+  setHistoryItemUsage,
   setInactive,
   setInlineErrorMessage,
   setIsPruned,
   setToolGenerated,
   streamUpdate,
 } from "../slices/sessionSlice";
-import { ThunkApiType } from "../store";
+import { AppThunkDispatch, RootState, ThunkApiType } from "../store";
 import { constructMessages } from "../util/constructMessages";
 
 import { modelSupportsNativeTools } from "core/llm/toolSupport";
@@ -67,6 +69,42 @@ function buildReasoningCompletionOptions(
   }
 
   return reasoningOptions;
+}
+
+/**
+ * Record start/end timing (and usage when available) for the last
+ * assistant turn in history. Safe to call on both success and error/cancel
+ * paths — no-op if the last history item is not an assistant message.
+ */
+function recordAssistantTurnTiming(
+  getState: () => RootState,
+  dispatch: AppThunkDispatch,
+  startedAt: number,
+  endedAt: number,
+): void {
+  const history = getState().session.history;
+  if (history.length === 0) {
+    return;
+  }
+  const lastIndex = history.length - 1;
+  const lastItem = history[lastIndex];
+  if (lastItem.message.role !== "assistant") {
+    return;
+  }
+  dispatch(
+    setHistoryItemTiming({
+      index: lastIndex,
+      timing: {
+        startedAt,
+        endedAt,
+        durationMs: Math.max(0, endedAt - startedAt),
+      },
+    }),
+  );
+  const usage = lastItem.message.usage;
+  if (usage) {
+    dispatch(setHistoryItemUsage({ index: lastIndex, usage }));
+  }
 }
 
 export const streamNormalInput = createAsyncThunk<
@@ -226,6 +264,8 @@ export const streamNormalInput = createAsyncThunk<
       }
 
       // Attach prompt log and end thinking for reasoning models
+      const endTime = Date.now();
+      recordAssistantTurnTiming(getState, dispatch, start, endTime);
       if (next.done && next.value) {
         dispatch(addPromptCompletionPair([next.value]));
 
@@ -255,9 +295,11 @@ export const streamNormalInput = createAsyncThunk<
         }
       }
     } catch (e) {
+      const errorEndTime = Date.now();
+      recordAssistantTurnTiming(getState, dispatch, start, errorEndTime);
       const toolCallsToCancel = selectCurrentToolCalls(getState());
       posthog.capture("stream_premature_close_error", {
-        duration: (Date.now() - start) / 1000,
+        duration: (errorEndTime - start) / 1000,
         model: selectedChatModel.model,
         provider: selectedChatModel.underlyingProviderName,
         context: legacySlashCommandData ? "slash_command" : "regular_chat",

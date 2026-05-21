@@ -67,7 +67,13 @@ const PROMPT_LOG_KEYS = [
   "modelProvider",
   "prompt",
   "completion",
+  "promptTokens",
+  "completionTokens",
 ] as const;
+
+// Sentinel values for missing data
+const NA_STRING = "N/A";
+const NA_INT = -1;
 
 function pick(
   obj: any,
@@ -220,12 +226,131 @@ function sanitizeToolCallState(s: any): Record<string, unknown> {
     parsedArgs: s?.parsedArgs ?? {},
     tool: sanitizeToolDefinition(s?.tool),
     output: Array.isArray(s?.output) ? s.output.map(sanitizeToolOutput) : [],
+    timing: sanitizeTiming(s?.timing),
+    usage: sanitizeUsage(s?.usage),
     ...(error ? { error } : {}),
   };
 }
 
 function sanitizePromptLog(p: any): Record<string, unknown> {
   return (pick(p, PROMPT_LOG_KEYS) ?? {}) as Record<string, unknown>;
+}
+
+/**
+ * Sanitize timing object: convert epoch ms to ISO date-time strings,
+ * compute durationMs, and use sentinel values for missing data.
+ *
+ * Invalid intervals (endedAt < startedAt) report -1 rather than clamping
+ * to 0, so downstream aggregators can distinguish "no data" from a
+ * genuinely zero-length interval.
+ */
+function sanitizeTiming(t: any): Record<string, unknown> {
+  const startedAtMs =
+    typeof t?.startedAt === "number" ? t.startedAt : undefined;
+  const endedAtMs = typeof t?.endedAt === "number" ? t.endedAt : undefined;
+  const hasInterval =
+    startedAtMs !== undefined &&
+    endedAtMs !== undefined &&
+    endedAtMs >= startedAtMs;
+  return {
+    startedAt:
+      startedAtMs !== undefined
+        ? new Date(startedAtMs).toISOString()
+        : NA_STRING,
+    endedAt:
+      endedAtMs !== undefined ? new Date(endedAtMs).toISOString() : NA_STRING,
+    durationMs: hasInterval ? endedAtMs! - startedAtMs! : NA_INT,
+  };
+}
+
+/**
+ * Sanitize usage object: extract token counts and apply sentinel values.
+ * Accepts BOTH the normalized camelCase `Usage` shape used in `Session.usage`
+ * / `ChatHistoryItem.usage` AND the raw provider snake_case shape that the CLI
+ * stores when it assigns `fullUsage = chunk.usage` from the OpenAI-style stream
+ * (`prompt_tokens`, `completion_tokens`, `prompt_tokens_details.cache_read_tokens`,
+ * etc.). Without the snake_case fallback, every per-turn `usage` written by the
+ * CLI sanitizes to -1.
+ *
+ * Prefers the provider-reported `totalTokens` when present (it may include
+ * reasoning/cached tokens beyond prompt + completion); otherwise derives
+ * it from promptTokens + completionTokens when both are ≥ 0.
+ */
+function sanitizeUsage(u: any): Record<string, unknown> {
+  const pickNum = (...vals: unknown[]): number => {
+    for (const v of vals) if (typeof v === "number") return v;
+    return NA_INT;
+  };
+
+  const promptDetails = u?.promptTokensDetails ?? u?.prompt_tokens_details;
+  const completionDetails =
+    u?.completionTokensDetails ?? u?.completion_tokens_details;
+
+  const p = pickNum(u?.promptTokens, u?.prompt_tokens);
+  const c = pickNum(u?.completionTokens, u?.completion_tokens);
+  const reportedTotalRaw = u?.totalTokens ?? u?.total_tokens;
+  const reportedTotal =
+    typeof reportedTotalRaw === "number" ? reportedTotalRaw : undefined;
+  const totalTokens =
+    reportedTotal !== undefined
+      ? reportedTotal
+      : p >= 0 && c >= 0
+        ? p + c
+        : NA_INT;
+
+  const out: Record<string, unknown> = {
+    promptTokens: p,
+    completionTokens: c,
+    totalTokens,
+  };
+
+  // Optional fields: only include if present and numeric
+  const cached = promptDetails?.cachedTokens ?? promptDetails?.cached_tokens;
+  if (typeof cached === "number") {
+    out.cachedTokens = cached;
+  }
+  const cacheRead =
+    promptDetails?.cacheReadTokens ?? promptDetails?.cache_read_tokens;
+  if (typeof cacheRead === "number") {
+    out.cacheReadTokens = cacheRead;
+  }
+  const cacheWrite =
+    promptDetails?.cacheWriteTokens ?? promptDetails?.cache_write_tokens;
+  if (typeof cacheWrite === "number") {
+    out.cacheWriteTokens = cacheWrite;
+  }
+  const reasoning =
+    completionDetails?.reasoningTokens ?? completionDetails?.reasoning_tokens;
+  if (typeof reasoning === "number") {
+    out.reasoningTokens = reasoning;
+  }
+
+  // Optional cost & model identity (when present at the per-turn or session level).
+  // CLI stores `cost_cents` on `fullUsage`; convert back to dollars for `totalCost`.
+  if (typeof u?.totalCost === "number") {
+    out.totalCost = u.totalCost;
+  } else if (typeof u?.cost_cents === "number") {
+    out.totalCost = u.cost_cents / 100;
+  }
+  if (typeof u?.model === "string" && u.model.length > 0) {
+    out.model = u.model;
+  }
+  const provider = u?.modelProvider ?? u?.model_provider;
+  if (typeof provider === "string" && provider.length > 0) {
+    out.modelProvider = provider;
+  }
+
+  return out;
+}
+
+/**
+ * Build the top-level `sessionUsage` object from `Session.usage` (`SessionUsage`).
+ * Returns undefined when no usage is present, so the field is omitted from the
+ * Couchbase document rather than emitted with sentinels.
+ */
+function sanitizeSessionUsage(u: any): Record<string, unknown> | undefined {
+  if (!u || typeof u !== "object") return undefined;
+  return sanitizeUsage(u);
 }
 
 function sanitizeHistoryItem(item: any): Record<string, unknown> {
@@ -241,6 +366,8 @@ function sanitizeHistoryItem(item: any): Record<string, unknown> {
     contextItems: Array.isArray(item?.contextItems)
       ? item.contextItems.map(sanitizeContextItem)
       : [],
+    timing: sanitizeTiming(item?.timing),
+    usage: sanitizeUsage(item?.usage ?? item?.message?.usage),
   };
   if (states) out.toolCallStates = states.map(sanitizeToolCallState);
   if (Array.isArray(item?.promptLogs)) {
@@ -290,12 +417,13 @@ export function buildSessionDocument(
   session: Session,
 ): Record<string, unknown> {
   const nowIso = new Date().toISOString();
+  const sanitizedHistory = (session.history ?? []).map(sanitizeHistoryItem);
   const doc: Record<string, unknown> = {
     src: COUCHBASE_SOURCE,
     sessionId: session.sessionId,
     title: session.title,
     workspaceDirectory: session.workspaceDirectory,
-    chatHistory: (session.history ?? []).map(sanitizeHistoryItem),
+    chatHistory: sanitizedHistory,
   };
   if (session.error !== undefined) {
     doc.error = {
@@ -311,6 +439,8 @@ export function buildSessionDocument(
   }
   const toolErrors = collectToolErrors(session.history ?? [], nowIso);
   if (toolErrors.length > 0) doc.toolErrors = toolErrors;
+  const sessionUsage = sanitizeSessionUsage((session as any).usage);
+  if (sessionUsage) doc.sessionUsage = sessionUsage;
   return doc;
 }
 

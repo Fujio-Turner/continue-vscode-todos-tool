@@ -21,9 +21,11 @@ import {
   RuleMetadata,
   Session,
   ThinkingChatMessage,
+  Timing,
   Tool,
   ToolCallDelta,
   ToolCallState,
+  Usage,
 } from "core";
 import type { RemoteSessionMetadata } from "core/control-plane/client";
 import { mergeReasoningDetails } from "core/llm/openaiTypeConverters";
@@ -960,6 +962,60 @@ export const sessionSlice = createSlice({
         toolCallState.status = "calling";
       }
     },
+    setToolCallTiming: (
+      state,
+      action: PayloadAction<{
+        toolCallId: string;
+        timing: Timing;
+      }>,
+    ) => {
+      const toolCallState = findToolCallById(
+        state.history,
+        action.payload.toolCallId,
+      );
+      if (toolCallState) {
+        toolCallState.timing = action.payload.timing;
+      }
+    },
+    setToolCallUsage: (
+      state,
+      action: PayloadAction<{
+        toolCallId: string;
+        usage: Usage;
+      }>,
+    ) => {
+      const toolCallState = findToolCallById(
+        state.history,
+        action.payload.toolCallId,
+      );
+      if (toolCallState) {
+        toolCallState.usage = action.payload.usage;
+      }
+    },
+    setHistoryItemTiming: (
+      state,
+      action: PayloadAction<{
+        index: number;
+        timing: Timing;
+      }>,
+    ) => {
+      const item = state.history[action.payload.index];
+      if (item) {
+        item.timing = action.payload.timing;
+      }
+    },
+    setHistoryItemUsage: (
+      state,
+      action: PayloadAction<{
+        index: number;
+        usage: Usage;
+      }>,
+    ) => {
+      const item = state.history[action.payload.index];
+      if (item) {
+        item.usage = action.payload.usage;
+      }
+    },
     setMode: (state, action: PayloadAction<MessageModes>) => {
       state.mode = action.payload;
     },
@@ -1074,6 +1130,10 @@ export const {
   updateApplyState,
   abortStream,
   setToolCallCalling,
+  setToolCallTiming,
+  setToolCallUsage,
+  setHistoryItemTiming,
+  setHistoryItemUsage,
   cancelToolCall,
   errorToolCall,
   acceptToolCall,

@@ -10,6 +10,8 @@ import {
   errorToolCall,
   setInactive,
   setToolCallCalling,
+  setToolCallTiming,
+  setToolCallUsage,
   updateToolCallOutput,
 } from "../slices/sessionSlice";
 import { ThunkApiType } from "../store";
@@ -130,7 +132,8 @@ export const callToolById = createAsyncThunk<
   }
 
   // Capture telemetry for tool call execution outcome with duration
-  const duration_ms = Date.now() - startTime;
+  const endTime = Date.now();
+  const duration_ms = endTime - startTime;
   posthog.capture("tool_call_outcome", {
     model: selectedChatModel,
     succeeded: !error,
@@ -138,6 +141,36 @@ export const callToolById = createAsyncThunk<
     errorReason: error?.reason,
     duration_ms: duration_ms,
   });
+
+  // Capture timing for tool call
+  dispatch(
+    setToolCallTiming({
+      toolCallId,
+      timing: {
+        startedAt: startTime,
+        endedAt: endTime,
+        durationMs: duration_ms,
+      },
+    }),
+  );
+
+  // Capture usage for every terminal tool call (done | errored | canceled).
+  // Approximated via the standard "1 token ≈ 4 characters" heuristic since
+  // we don't have access to the chat model tokenizer on the GUI side.
+  const toolOutputChars = (output ?? []).reduce(
+    (sum, item) => sum + (item.content?.length ?? 0),
+    0,
+  );
+  const toolArgsChars = toolCallState.toolCall.function?.arguments?.length ?? 0;
+  dispatch(
+    setToolCallUsage({
+      toolCallId,
+      usage: {
+        promptTokens: Math.ceil(toolOutputChars / 4),
+        completionTokens: Math.ceil(toolArgsChars / 4),
+      },
+    }),
+  );
 
   if (streamResponse) {
     if (error) {
