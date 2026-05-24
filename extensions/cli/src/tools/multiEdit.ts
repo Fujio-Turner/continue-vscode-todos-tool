@@ -3,6 +3,7 @@ import * as fs from "fs";
 import { validateMultiEdit } from "core/edit/searchAndReplace/multiEditValidation.js";
 import { executeMultiFindAndReplace } from "core/edit/searchAndReplace/performReplace.js";
 import { ContinueError, ContinueErrorReason } from "core/util/errors.js";
+import { diffLines } from "diff";
 
 import { telemetryService } from "../telemetry/telemetryService.js";
 import {
@@ -24,6 +25,96 @@ export interface EditOperation {
 export interface MultiEditArgs {
   file_path: string;
   edits: EditOperation[];
+}
+
+const UPDATED_REGION_CONTEXT_LINES = 10;
+const UPDATED_REGION_MAX_LINES = 200;
+
+function splitLines(content: string): string[] {
+  return content.length === 0 ? [] : content.split("\n");
+}
+
+function formatUpdatedFileRegion(
+  originalContent: string,
+  newContent: string,
+): string {
+  const newLines = splitLines(newContent);
+  const ranges: Array<{ start: number; end: number }> = [];
+  let newLineNumber = 1;
+
+  for (const change of diffLines(originalContent, newContent)) {
+    const lineCount = splitLines(change.value).length;
+
+    if (change.added) {
+      ranges.push({
+        start: Math.max(1, newLineNumber - UPDATED_REGION_CONTEXT_LINES),
+        end: Math.min(
+          newLines.length,
+          newLineNumber + lineCount - 1 + UPDATED_REGION_CONTEXT_LINES,
+        ),
+      });
+      newLineNumber += lineCount;
+    } else if (!change.removed) {
+      newLineNumber += lineCount;
+    }
+  }
+
+  if (ranges.length === 0) {
+    return "Updated file region (after edits):\n(no changed regions detected)";
+  }
+
+  ranges.sort((a, b) => a.start - b.start);
+  const mergedRanges = ranges.reduce<Array<{ start: number; end: number }>>(
+    (merged, range) => {
+      const previous = merged[merged.length - 1];
+      if (previous && range.start <= previous.end + 1) {
+        previous.end = Math.max(previous.end, range.end);
+      } else {
+        merged.push({ ...range });
+      }
+      return merged;
+    },
+    [],
+  );
+
+  let remainingLines = UPDATED_REGION_MAX_LINES;
+  let truncated = false;
+  const outputLines = ["Updated file region (after edits):"];
+
+  for (const range of mergedRanges) {
+    if (remainingLines <= 0) {
+      truncated = true;
+      break;
+    }
+
+    if (outputLines.length > 1) {
+      outputLines.push("...");
+    }
+
+    const linesInRange = range.end - range.start + 1;
+    const linesToShow = Math.min(linesInRange, remainingLines);
+    for (
+      let lineNumber = range.start;
+      lineNumber < range.start + linesToShow;
+      lineNumber++
+    ) {
+      outputLines.push(`${lineNumber}: ${newLines[lineNumber - 1] ?? ""}`);
+    }
+
+    remainingLines -= linesToShow;
+    if (linesToShow < linesInRange) {
+      truncated = true;
+      break;
+    }
+  }
+
+  if (truncated) {
+    outputLines.push(
+      `... (updated region truncated to ${UPDATED_REGION_MAX_LINES} lines)`,
+    );
+  }
+
+  return outputLines.join("\n");
 }
 
 export const multiEditTool: Tool = {
@@ -49,7 +140,7 @@ IMPORTANT:
 - This tool is ideal when you need to make several changes to different parts of the same file
 
 CRITICAL REQUIREMENTS:
-1. ALWAYS use the ${readFileTool.name} tool just before making edits, to understand the file's up-to-date contents and context
+1. ALWAYS use the ${readFileTool.name} tool just before making edits, to understand the file's up-to-date contents and context. ALWAYS call ${readFileTool.name} just before any edit that follows another tool call which may have changed the file (including any prior multi_edit, edit, write, or shell command). Do not reuse old_string values from a previous turn without re-reading.
 2. When making edits:
 - Ensure all edits result in idiomatic, correct code
 - Do not leave the code in a broken state
@@ -64,7 +155,8 @@ WARNINGS:
 - The tool will fail if edits.old_string and edits.new_string are the same - they MUST be different
 - The tool will fail if you have not used the ${readFileTool.name} tool to read the file in this session
 - The tool will fail if the file does not exist - it cannot create new files
-- This tool cannot create new files - the file must already exist`,
+- This tool cannot create new files - the file must already exist
+- After every successful multi_edit, the returned message contains the updated region. Treat that updated region as your new ground truth before proposing further edits.`,
   parameters: {
     type: "object",
     required: ["file_path", "edits"],
@@ -165,8 +257,12 @@ WARNINGS:
         args.newContent,
         args.file_path,
       );
+      const updatedRegion = formatUpdatedFileRegion(
+        args.originalContent,
+        args.newContent,
+      );
 
-      return `Successfully edited ${args.file_path} with ${args.editCount} edit${args.editCount === 1 ? "" : "s"}\nDiff:\n${diff}`;
+      return `Successfully edited ${args.file_path} with ${args.editCount} edit${args.editCount === 1 ? "" : "s"}\nDiff:\n${diff}\n\n${updatedRegion}`;
     } catch (error) {
       if (error instanceof ContinueError) {
         throw error;
