@@ -2,7 +2,11 @@ import { resolveInputPath } from "../../util/pathResolver";
 import { getUriPathBasename } from "../../util/uri";
 
 import { ToolImpl } from ".";
-import { throwIfFileIsSecurityConcern } from "../../indexing/ignore";
+import {
+  loadWorkspaceSecurityAllowList,
+  securityBlockContent,
+  throwIfFileIsSecurityConcern,
+} from "../../indexing/ignore";
 import { getNumberArg, getStringArg } from "../parseArgs";
 import { throwIfFileExceedsHalfOfContext } from "./readFileLimit";
 import { ContinueError, ContinueErrorReason } from "../../util/errors";
@@ -46,7 +50,28 @@ export const readFileRangeImpl: ToolImpl = async (args, extras) => {
   }
 
   // Security check on the resolved display path
-  throwIfFileIsSecurityConcern(resolvedPath.displayPath);
+  try {
+    const allowPatterns = await loadWorkspaceSecurityAllowList(extras.ide);
+    throwIfFileIsSecurityConcern(resolvedPath.displayPath, { allowPatterns });
+  } catch (e) {
+    if (
+      e instanceof ContinueError &&
+      e.reason === ContinueErrorReason.FileIsSecurityConcern
+    ) {
+      return [
+        {
+          name: getUriPathBasename(resolvedPath.uri),
+          description: `${resolvedPath.displayPath} (lines ${startLine}-${endLine})`,
+          content: securityBlockContent(resolvedPath.displayPath),
+          uri: {
+            type: "file",
+            value: resolvedPath.uri,
+          },
+        },
+      ];
+    }
+    throw e;
+  }
 
   // Use the IDE's readRangeInFile method with 0-based range (IDE expects 0-based internally)
   const content = await extras.ide.readRangeInFile(resolvedPath.uri, {

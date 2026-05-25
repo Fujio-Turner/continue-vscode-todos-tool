@@ -4,6 +4,7 @@ import {
   DEFAULT_SECURITY_IGNORE_FILETYPES,
   defaultFileAndFolderSecurityIgnores,
   isSecurityConcern,
+  throwIfFileIsSecurityConcern,
 } from "./ignore";
 
 describe("isSecurityConcern", () => {
@@ -260,6 +261,28 @@ describe("isSecurityConcern", () => {
         const ignoreResult = defaultFileAndFolderSecurityIgnores.ignores(file);
         expect(functionResult).toBe(ignoreResult);
       });
+    });
+  });
+
+  describe("security allow patterns", () => {
+    it("allows explicitly negated config files without changing defaults", () => {
+      expect(isSecurityConcern("config.json")).toBe(true);
+      expect(
+        isSecurityConcern("config.json", { allowPatterns: ["!config.json"] }),
+      ).toBe(false);
+      expect(
+        isSecurityConcern("foo/config.json", {
+          allowPatterns: ["!config.json"],
+        }),
+      ).toBe(false);
+      expect(
+        isSecurityConcern(".env", { allowPatterns: ["!config.json"] }),
+      ).toBe(true);
+      expect(() =>
+        throwIfFileIsSecurityConcern("config.json", {
+          allowPatterns: ["!config.json"],
+        }),
+      ).not.toThrow();
     });
   });
 });

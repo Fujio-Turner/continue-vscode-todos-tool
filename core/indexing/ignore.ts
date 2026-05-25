@@ -2,6 +2,7 @@ import ignore from "ignore";
 
 import path from "path";
 import { fileURLToPath } from "url";
+import { IDE } from "..";
 import { ContinueError, ContinueErrorReason } from "../util/errors";
 
 // Security-focused ignore patterns - these should always be excluded for security reasons
@@ -235,7 +236,29 @@ export const defaultIgnoreFileAndDir = ignore()
   .add(defaultIgnoreFile)
   .add(defaultIgnoreDir);
 
-export function isSecurityConcern(filePathOrUri: string) {
+interface SecurityConcernOptions {
+  allowPatterns?: string[];
+}
+
+function getSecurityIgnores(allowPatterns?: string[]) {
+  if (!allowPatterns?.length) {
+    return defaultFileAndFolderSecurityIgnores;
+  }
+
+  const normalizedAllowPatterns = allowPatterns.map((pattern) =>
+    pattern.startsWith("!") ? pattern : `!${pattern}`,
+  );
+
+  return ignore()
+    .add(DEFAULT_SECURITY_IGNORE_FILETYPES)
+    .add(DEFAULT_SECURITY_IGNORE_DIRS)
+    .add(normalizedAllowPatterns);
+}
+
+export function isSecurityConcern(
+  filePathOrUri: string,
+  opts?: SecurityConcernOptions,
+) {
   if (!filePathOrUri) {
     return false;
   }
@@ -251,16 +274,48 @@ export function isSecurityConcern(filePathOrUri: string) {
   if (!filepath) {
     return false;
   }
-  return defaultFileAndFolderSecurityIgnores.ignores(filepath);
+  return getSecurityIgnores(opts?.allowPatterns).ignores(filepath);
 }
 
-export function throwIfFileIsSecurityConcern(filepath: string) {
-  if (isSecurityConcern(filepath)) {
+export function throwIfFileIsSecurityConcern(
+  filepath: string,
+  opts?: SecurityConcernOptions,
+) {
+  if (isSecurityConcern(filepath, opts)) {
     throw new ContinueError(
       ContinueErrorReason.FileIsSecurityConcern,
       `Reading or Editing ${filepath} is not allowed because it is a security concern. Do not attempt to read or edit this file in any way.`,
     );
   }
+}
+
+export async function loadWorkspaceSecurityAllowList(
+  ide: IDE,
+): Promise<string[]> {
+  const workspaceDirs = await ide.getWorkspaceDirs();
+  const workspaceDir = workspaceDirs[0];
+  if (!workspaceDir) {
+    return [];
+  }
+
+  try {
+    const continueIgnore = await ide.readFile(
+      `${workspaceDir}/.continueignore`,
+    );
+    return gitIgArrayFromFile(continueIgnore)
+      .filter((line) => line.startsWith("!"))
+      .map((line) => line.slice(1));
+  } catch {
+    return [];
+  }
+}
+
+export function securityBlockContent(displayPath: string) {
+  return `[File access blocked by local security policy: ${displayPath}]
+This filename matches a default-blocked pattern (likely to contain secrets).
+If this file is safe to share, add a negation to .continueignore, e.g.:
+    !config.json
+Then re-run read_file. Otherwise, ask the user to paste the relevant excerpt.`;
 }
 
 export function gitIgArrayFromFile(file: string) {
