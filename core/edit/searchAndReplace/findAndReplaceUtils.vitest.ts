@@ -102,6 +102,7 @@ describe("validateSingleEdit", () => {
       }).toThrowError(
         expect.objectContaining({
           reason: ContinueErrorReason.FindAndReplaceIdenticalOldAndNewStrings,
+          message: expect.stringContaining("re-read the file"),
         }),
       );
     });

@@ -29,7 +29,7 @@ export function validateSingleEdit(
   if (oldString === newString) {
     throw new ContinueError(
       ContinueErrorReason.FindAndReplaceIdenticalOldAndNewStrings,
-      `${context}old_string and new_string must be different`,
+      `${context}old_string and new_string are identical, so this edit is a no-op. The change you intended may already be present in the file - re-read the file with the read_file tool before issuing further edits, and only include edits whose new_string actually differs from old_string.`,
     );
   }
   if (replaceAll !== undefined && typeof replaceAll !== "boolean") {

@@ -87,6 +87,39 @@ describe("multiEdit shared validation", () => {
       expect(() => validateMultiEdit(args)).toThrowError(
         expect.objectContaining({
           reason: ContinueErrorReason.FindAndReplaceIdenticalOldAndNewStrings,
+          message: expect.stringContaining("re-read the file"),
+        }),
+      );
+      expect(() => validateMultiEdit(args)).toThrowError(
+        expect.objectContaining({
+          message: expect.stringContaining("edit at index 0"),
+        }),
+      );
+    });
+
+    it("should include non-first edit index and re-read guidance for identical old_string/new_string", () => {
+      const args = {
+        edits: [
+          {
+            old_string: "Hello world",
+            new_string: "Hi there",
+          },
+          {
+            old_string: "Goodbye world",
+            new_string: "Goodbye world",
+          },
+        ],
+      };
+
+      expect(() => validateMultiEdit(args)).toThrowError(
+        expect.objectContaining({
+          reason: ContinueErrorReason.FindAndReplaceIdenticalOldAndNewStrings,
+          message: expect.stringContaining("re-read the file"),
+        }),
+      );
+      expect(() => validateMultiEdit(args)).toThrowError(
+        expect.objectContaining({
+          message: expect.stringContaining("edit at index 1"),
         }),
       );
     });

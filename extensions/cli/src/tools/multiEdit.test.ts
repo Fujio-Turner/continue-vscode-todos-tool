@@ -155,9 +155,11 @@ describe("multiEditTool CLI specific", () => {
 
       const result = await multiEditTool.run(args);
 
-      expect(result).toBe(
+      expect(result).toContain(
         `Successfully edited ${testFilePath} with 1 edit\nDiff:\nmocked diff`,
       );
+      expect(result).toContain("Updated file region (after edits):");
+      expect(result).toContain("1: Hi there");
       expect(fs.writeFileSync).toHaveBeenCalledWith(
         testFilePath,
         newContent,
@@ -175,8 +177,37 @@ describe("multiEditTool CLI specific", () => {
 
       const result = await multiEditTool.run(args);
 
-      expect(result).toBe(
+      expect(result).toContain(
         `Successfully edited ${testFilePath} with 3 edits\nDiff:\nmocked diff`,
+      );
+    });
+
+    it("should truncate large updated regions", async () => {
+      const originalLines = Array.from(
+        { length: 260 },
+        (_, index) => `line ${index + 1}`,
+      );
+      const newLines = originalLines.map((line, index) =>
+        index < 230 ? `updated ${line}` : line,
+      );
+
+      const result = await multiEditTool.run({
+        file_path: testFilePath,
+        newContent: newLines.join("\n"),
+        originalContent: originalLines.join("\n"),
+        editCount: 1,
+      });
+
+      expect(result).toContain("Updated file region (after edits):");
+      expect(result).toContain("updated region truncated to 200 lines");
+    });
+
+    it("should tell models to re-read after prior modifications", () => {
+      expect(multiEditTool.description).toContain(
+        "Do not reuse old_string values from a previous turn without re-reading",
+      );
+      expect(multiEditTool.description).toContain(
+        "returned message contains the updated region",
       );
     });
 
