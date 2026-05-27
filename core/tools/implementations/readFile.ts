@@ -2,7 +2,11 @@ import { resolveInputPath } from "../../util/pathResolver";
 import { getUriPathBasename } from "../../util/uri";
 
 import { ToolImpl } from ".";
-import { throwIfFileIsSecurityConcern } from "../../indexing/ignore";
+import {
+  loadWorkspaceSecurityAllowList,
+  securityBlockContent,
+  throwIfFileIsSecurityConcern,
+} from "../../indexing/ignore";
 import { getStringArg } from "../parseArgs";
 import { throwIfFileExceedsHalfOfContext } from "./readFileLimit";
 import { ContinueError, ContinueErrorReason } from "../../util/errors";
@@ -20,7 +24,28 @@ export const readFileImpl: ToolImpl = async (args, extras) => {
   }
 
   // Security check on the resolved display path
-  throwIfFileIsSecurityConcern(resolvedPath.displayPath);
+  try {
+    const allowPatterns = await loadWorkspaceSecurityAllowList(extras.ide);
+    throwIfFileIsSecurityConcern(resolvedPath.displayPath, { allowPatterns });
+  } catch (e) {
+    if (
+      e instanceof ContinueError &&
+      e.reason === ContinueErrorReason.FileIsSecurityConcern
+    ) {
+      return [
+        {
+          name: getUriPathBasename(resolvedPath.uri),
+          description: resolvedPath.displayPath,
+          content: securityBlockContent(resolvedPath.displayPath),
+          uri: {
+            type: "file",
+            value: resolvedPath.uri,
+          },
+        },
+      ];
+    }
+    throw e;
+  }
 
   const content = await extras.ide.readFile(resolvedPath.uri);
 

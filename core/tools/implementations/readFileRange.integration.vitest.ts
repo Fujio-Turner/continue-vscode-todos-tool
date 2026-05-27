@@ -27,6 +27,8 @@ test("readFileRangeImpl handles out-of-bounds ranges gracefully", async () => {
 
   // Test case 1: Start line beyond end of file
   const mockIdeOutOfBounds = {
+    getWorkspaceDirs: vi.fn().mockResolvedValue(["file:///workspace"]),
+    readFile: vi.fn().mockRejectedValue(new Error("missing .continueignore")),
     readRangeInFile: vi.fn().mockResolvedValue(""), // IDE returns empty string
   };
 
@@ -50,6 +52,8 @@ test("readFileRangeImpl handles out-of-bounds ranges gracefully", async () => {
 
   // Test case 2: End line beyond end of file
   const mockIdePartialRange = {
+    getWorkspaceDirs: vi.fn().mockResolvedValue(["file:///workspace"]),
+    readFile: vi.fn().mockRejectedValue(new Error("missing .continueignore")),
     readRangeInFile: vi.fn().mockResolvedValue("line5\nline6"), // IDE returns available content
   };
 
@@ -168,6 +172,8 @@ test("readFileRangeImpl handles normal ranges correctly", async () => {
   vi.mocked(throwIfFileExceedsHalfOfContext).mockResolvedValue(undefined);
 
   const mockIde = {
+    getWorkspaceDirs: vi.fn().mockResolvedValue(["file:///workspace"]),
+    readFile: vi.fn().mockRejectedValue(new Error("missing .continueignore")),
     readRangeInFile: vi.fn().mockResolvedValue("line2\nline3\nline4"),
   };
 
@@ -201,4 +207,30 @@ test("readFileRangeImpl handles normal ranges correctly", async () => {
     start: { line: 1, character: 0 }, // 2 - 1
     end: { line: 3, character: MAX_CHAR_POSITION }, // 4 - 1
   });
+});
+
+test("readFileRangeImpl returns a blocked result for security concerns", async () => {
+  const { resolveRelativePathInDir } = await import("../../util/ideUtils");
+  const { getUriPathBasename } = await import("../../util/uri");
+
+  vi.mocked(resolveRelativePathInDir).mockResolvedValue("file:///config.json");
+  vi.mocked(getUriPathBasename).mockReturnValue("config.json");
+
+  const mockIde = {
+    getWorkspaceDirs: vi.fn().mockResolvedValue(["file:///workspace"]),
+    readFile: vi.fn().mockRejectedValue(new Error("missing .continueignore")),
+    readRangeInFile: vi.fn(),
+  };
+
+  const result = await readFileRangeImpl(
+    { filepath: "config.json", startLine: 1, endLine: 2 },
+    {
+      ide: mockIde,
+      config: { selectedModelByRole: { chat: { contextLength: 8192 } } },
+    } as unknown as ToolExtras,
+  );
+
+  expect(result[0].content).toContain("blocked by local security policy");
+  expect(result[0].content).toContain(".continueignore");
+  expect(mockIde.readRangeInFile).not.toHaveBeenCalled();
 });
